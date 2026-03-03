@@ -10,25 +10,25 @@ import pytesseract
 from pdf2image import convert_from_bytes
 
 # -------------------------------------------------------------------
-# Configuration de Tesseract (recherche automatique)
+# Vérification de Tesseract
 # -------------------------------------------------------------------
-tesseract_path = shutil.which("tesseract")
-if tesseract_path:
-    pytesseract.pytesseract.tesseract_cmd = tesseract_path
-else:
+try:
+    tesseract_version = pytesseract.get_tesseract_version()
+    st.sidebar.success(f"✅ Tesseract trouvé (version {tesseract_version})")
+except Exception as e:
     st.sidebar.error(
-        "⚠️ Tesseract n'est pas installé ou introuvable. "
-        "L'OCR ne fonctionnera pas. Vérifiez votre fichier packages.txt"
+        "⚠️ Tesseract n'est pas accessible. L'OCR ne fonctionnera pas.\n"
+        "Vérifiez votre fichier packages.txt et redéployez.\n"
+        f"Détail : {e}"
     )
+    # On force l'arrêt si Tesseract est indispensable
+    st.stop()
 
 # -------------------------------------------------------------------
-# Fonctions d'extraction (intégrées)
+# Fonctions d'extraction
 # -------------------------------------------------------------------
 def extraire_texte_avec_ocr(fichier, extension, lang='fra+eng'):
-    """
-    Extrait le texte d'un fichier uploadé (PDF ou image) en utilisant
-    pdfplumber (PDF textuel) ou OCR (PDF scanné / image).
-    """
+    """Extrait le texte d'un fichier uploadé (PDF ou image)"""
     texte = ""
     try:
         if extension.lower() == 'pdf':
@@ -38,48 +38,44 @@ def extraire_texte_avec_ocr(fichier, extension, lang='fra+eng'):
                     if page_text and page_text.strip():
                         texte += page_text
                     else:
-                        # Convertir la page en image pour OCR
                         pil_image = page.to_image(resolution=300).original
                         texte += pytesseract.image_to_string(pil_image, lang=lang)
         else:
-            # Image directe (jpg, png, etc.)
             image = Image.open(fichier)
             texte = pytesseract.image_to_string(image, lang=lang)
     except Exception as e:
-        st.error(f"Erreur lors de l'extraction : {e}")
+        st.error(f"Erreur lors de l'extraction OCR : {e}")
         texte = ""
     return texte
 
 def chercher_champ(texte, pattern, groupe=1, flags=re.IGNORECASE):
-    """
-    Cherche un motif regex dans le texte et retourne le groupe capturé.
-    Si le groupe demandé n'existe pas, retourne la correspondance entière.
-    """
     if not texte:
         return ""
-    match = re.search(pattern, texte, flags)
-    if match:
-        try:
-            return match.group(groupe).strip()
-        except IndexError:
-            # Si le groupe n'existe pas, on retourne tout le match
-            return match.group(0).strip()
+    try:
+        match = re.search(pattern, texte, flags)
+        if match:
+            try:
+                return match.group(groupe).strip()
+            except IndexError:
+                return match.group(0).strip()
+    except Exception as e:
+        st.warning(f"Erreur regex pour le motif {pattern}: {e}")
+        return ""
     return ""
 
 # -------------------------------------------------------------------
 # Interface Streamlit
 # -------------------------------------------------------------------
 st.set_page_config(page_title="Extraction Factures & BL (OCR)", layout="wide")
-st.title("📄 Remplissage automatique d'Excel depuis factures et bons de livraison (PDF ou image)")
+st.title("📄 Remplissage automatique d'Excel depuis factures et bons de livraison")
 
-# Initialisation du DataFrame en session
 if "df_final" not in st.session_state:
     st.session_state.df_final = pd.DataFrame(columns=[
         "fournisseur", "date", "commande", "bon_de_livraison", "numero_facture", "montant_facture"
     ])
 
 # -------------------------------------------------------------------
-# Barre latérale : paramètres d'extraction
+# Barre latérale
 # -------------------------------------------------------------------
 with st.sidebar:
     st.header("⚙️ Paramètres d'extraction")
@@ -164,32 +160,23 @@ if st.button("🚀 Extraire et ajouter les données"):
         
         for i, fichier in enumerate(fichiers):
             with st.spinner(f"Traitement de {fichier.name}..."):
-                # Déterminer l'extension
                 ext = os.path.splitext(fichier.name)[1][1:].lower()
-                
-                # Lire le contenu du fichier (car après lecture, le pointeur est consommé)
                 contenu = fichier.read()
                 fichier_bytes = BytesIO(contenu)
                 
-                # Extraire le texte
                 texte = extraire_texte_avec_ocr(fichier_bytes, ext, lang=lang_ocr)
                 
-                # Afficher un aperçu (dans un expandeur)
                 with st.expander(f"Aperçu du texte extrait de {fichier.name}"):
                     st.text(texte[:2000] + ("..." if len(texte) > 2000 else ""))
                 
-                # Chercher chaque champ
                 ligne = {}
                 for champ, pattern in patterns.items():
-                    valeur = chercher_champ(texte, pattern)
-                    ligne[champ] = valeur
+                    ligne[champ] = chercher_champ(texte, pattern)
                 
                 nouvelles_lignes.append(ligne)
             
-            # Mise à jour de la barre de progression
             progress_bar.progress((i + 1) / len(fichiers))
         
-        # Ajout au DataFrame final
         if nouvelles_lignes:
             df_nouv = pd.DataFrame(nouvelles_lignes)
             st.session_state.df_final = pd.concat([st.session_state.df_final, df_nouv], ignore_index=True)
@@ -198,10 +185,10 @@ if st.button("🚀 Extraire et ajouter les données"):
             st.warning("Aucune donnée extraite. Vérifiez les regex ou le contenu des fichiers.")
 
 # -------------------------------------------------------------------
-# Affichage et édition des données
+# Affichage et édition
 # -------------------------------------------------------------------
 st.subheader("📋 Données consolidées")
-st.dataframe(st.session_state.df_final, width='stretch')  # Correction de l'obsolescence
+st.dataframe(st.session_state.df_final, width='stretch')
 
 if st.checkbox("✏️ Modifier les données manuellement"):
     df_edit = st.data_editor(st.session_state.df_final, num_rows="dynamic")
@@ -210,14 +197,13 @@ if st.checkbox("✏️ Modifier les données manuellement"):
         st.success("Mise à jour effectuée.")
 
 # -------------------------------------------------------------------
-# Téléchargement du fichier Excel
+# Téléchargement
 # -------------------------------------------------------------------
 if not st.session_state.df_final.empty:
     output = BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         st.session_state.df_final.to_excel(writer, index=False, sheet_name="Factures")
     output.seek(0)
-    
     st.download_button(
         label="📥 Télécharger le fichier Excel",
         data=output,
