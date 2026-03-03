@@ -2,15 +2,26 @@ import streamlit as st
 import pandas as pd
 import re
 import os
-import tempfile
+import shutil
 from io import BytesIO
 from PIL import Image
 import pdfplumber
 import pytesseract
-from pdf2image import convert_from_bytes
 
 # -------------------------------------------------------------------
-# Fonctions d'extraction (intégrées pour simplifier)
+# Configuration de Tesseract (recherche automatique du chemin)
+# -------------------------------------------------------------------
+tesseract_path = shutil.which("tesseract")
+if tesseract_path:
+    pytesseract.pytesseract.tesseract_cmd = tesseract_path
+else:
+    st.sidebar.error(
+        "⚠️ Tesseract n'est pas installé ou introuvable. "
+        "L'OCR ne fonctionnera pas. Installez-le depuis https://github.com/tesseract-ocr/tesseract"
+    )
+
+# -------------------------------------------------------------------
+# Fonctions d'extraction
 # -------------------------------------------------------------------
 def extraire_texte_avec_ocr(fichier, extension, lang='fra+eng'):
     """
@@ -56,17 +67,8 @@ def chercher_champ(texte, pattern, groupe=1, flags=re.IGNORECASE):
 # -------------------------------------------------------------------
 # Interface Streamlit
 # -------------------------------------------------------------------
-st.set_page_config(page_title="Extraction Factures & BL (OCR)", layout="wide")
+st.set_page_config(page_title="Extraction Factures & BL (OCR améliorée)", layout="wide")
 st.title("📄 Remplissage automatique d'Excel depuis factures et bons de livraison (PDF ou image)")
-
-# Vérification rapide de Tesseract
-try:
-    pytesseract.get_tesseract_version()
-except Exception:
-    st.sidebar.error(
-        "⚠️ Tesseract n'est pas installé ou introuvable. "
-        "L'OCR ne fonctionnera pas. Installez-le depuis https://github.com/tesseract-ocr/tesseract"
-    )
 
 # Initialisation du DataFrame en session
 if "df_final" not in st.session_state:
@@ -85,7 +87,7 @@ with st.sidebar:
         "fournisseur": st.text_input(
             "Fournisseur",
             r"(?:Fournisseur|Supplier|Vendor|Client)\s*[:\-]?\s*(.+)",
-            help="Exemple: Fournisseur : SARL Dupont"
+            help="Exemple: Fournisseur : SARL Dupont. Si le fournisseur est dans un logo, vous pouvez le saisir manuellement après extraction."
         ),
         "date": st.text_input(
             "Date",
@@ -94,22 +96,22 @@ with st.sidebar:
         ),
         "commande": st.text_input(
             "N° commande",
-            r"(?:Commande|Order|N° Commande|PO Number)\s*[:\-]?\s*([A-Z0-9\-]+)",
-            help="Exemple: Commande n° 12345"
+            r"(?:Commande|Order|N° Commande|PO Number|Commande n°)\s*[:\-]?\s*([A-Z0-9\-/]+)",
+            help="Exemple: Commande n° CMD-2025-02"
         ),
         "bon_de_livraison": st.text_input(
             "N° bon de livraison",
-            r"(?:BL|Livraison|Delivery|Bon de livraison)\s*[:\-]?\s*([A-Z0-9\-]+)",
+            r"(?:BL|Bon de livraison|Delivery|N° BL|BL n°)\s*[:\-]?\s*([A-Z0-9\-/]+)",
             help="Exemple: BL-2025-001"
         ),
         "numero_facture": st.text_input(
             "N° facture",
-            r"(?:Facture|Invoice|N° Facture|Invoice Number)\s*[:\-]?\s*([A-Z0-9\-]+)",
-            help="Exemple: F2025-01"
+            r"(?:Facture|Invoice|N° Facture|Facture n°|Invoice Number)\s*[:\-]?\s*([A-Z0-9\-/]+)",
+            help="Exemple: FA-2025-01"
         ),
         "montant_facture": st.text_input(
             "Montant facture",
-            r"(?:Total|Montant|Amount|TOTAL TTC|Net à payer)\s*[:\-]?\s*([\d\s,\.]+\s*(?:€|EUR|USD)?)",
+            r"(?:Total|Montant|Amount|TOTAL TTC|Net à payer|TOTAL|Total TTC)\s*[:\-]?\s*([\d\s,\.]+(?:\s*€|\s*EUR)?)",
             help="Exemple: Total TTC : 125,50 €"
         )
     }
