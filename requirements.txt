@@ -1,8 +1,9 @@
-streamlit
-pandas
-pdfplumber
-openpyxl
-xlsxwriter
-pytesseract
-Pillow
-pdf2image
+dash>=2.14.0
+pandas>=2.0.0
+pdfplumber>=0.10.0
+pytesseract>=0.3.10
+Pillow>=10.0.0
+pdf2image>=1.16.0
+openpyxl>=3.1.0
+xlsxwriter>=3.1.0
+gunicorn>=20.1.0
