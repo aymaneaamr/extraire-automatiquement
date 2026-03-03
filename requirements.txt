@@ -3,3 +3,6 @@ pandas
 pdfplumber
 openpyxl
 xlsxwriter
+pytesseract
+Pillow
+pdf2image
