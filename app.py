@@ -7,9 +7,10 @@ from io import BytesIO
 from PIL import Image
 import pdfplumber
 import pytesseract
+from pdf2image import convert_from_bytes
 
 # -------------------------------------------------------------------
-# Configuration de Tesseract (recherche automatique du chemin)
+# Configuration de Tesseract (recherche automatique)
 # -------------------------------------------------------------------
 tesseract_path = shutil.which("tesseract")
 if tesseract_path:
@@ -17,11 +18,11 @@ if tesseract_path:
 else:
     st.sidebar.error(
         "⚠️ Tesseract n'est pas installé ou introuvable. "
-        "L'OCR ne fonctionnera pas. Installez-le depuis https://github.com/tesseract-ocr/tesseract"
+        "L'OCR ne fonctionnera pas. Vérifiez votre fichier packages.txt"
     )
 
 # -------------------------------------------------------------------
-# Fonctions d'extraction
+# Fonctions d'extraction (intégrées)
 # -------------------------------------------------------------------
 def extraire_texte_avec_ocr(fichier, extension, lang='fra+eng'):
     """
@@ -61,13 +62,14 @@ def chercher_champ(texte, pattern, groupe=1, flags=re.IGNORECASE):
         try:
             return match.group(groupe).strip()
         except IndexError:
+            # Si le groupe n'existe pas, on retourne tout le match
             return match.group(0).strip()
     return ""
 
 # -------------------------------------------------------------------
 # Interface Streamlit
 # -------------------------------------------------------------------
-st.set_page_config(page_title="Extraction Factures & BL (OCR améliorée)", layout="wide")
+st.set_page_config(page_title="Extraction Factures & BL (OCR)", layout="wide")
 st.title("📄 Remplissage automatique d'Excel depuis factures et bons de livraison (PDF ou image)")
 
 # Initialisation du DataFrame en session
@@ -87,7 +89,7 @@ with st.sidebar:
         "fournisseur": st.text_input(
             "Fournisseur",
             r"(?:Fournisseur|Supplier|Vendor|Client)\s*[:\-]?\s*(.+)",
-            help="Exemple: Fournisseur : SARL Dupont. Si le fournisseur est dans un logo, vous pouvez le saisir manuellement après extraction."
+            help="Exemple: Fournisseur : SARL Dupont"
         ),
         "date": st.text_input(
             "Date",
@@ -199,7 +201,7 @@ if st.button("🚀 Extraire et ajouter les données"):
 # Affichage et édition des données
 # -------------------------------------------------------------------
 st.subheader("📋 Données consolidées")
-st.dataframe(st.session_state.df_final, use_container_width=True)
+st.dataframe(st.session_state.df_final, width='stretch')  # Correction de l'obsolescence
 
 if st.checkbox("✏️ Modifier les données manuellement"):
     df_edit = st.data_editor(st.session_state.df_final, num_rows="dynamic")
