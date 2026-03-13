@@ -10,3 +10,9 @@ gunicorn>=20.1.0
 streamlit
 anthropic
 altair>=4.2.0 
+typing-extensions
+toml
+blinker
+cachetools
+gitpython
+pyarrow
