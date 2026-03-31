@@ -458,11 +458,12 @@ with col_left:
         with col_clear:
             if st.button("🗑️ Effacer", use_container_width=True):
                 st.session_state.extracted_data = []
-                st.rerun()
+                st.session_state.pop("last_extraction_count", None)
 
 with col_right:
     st.markdown("### 📊 Données Extraites")
 
+    # ── Lancement de l'extraction ──────────────────────────────────────────
     if extract_btn and uploaded_files:
         mime_map = {
             "pdf": "application/pdf",
@@ -470,62 +471,88 @@ with col_right:
             "jpg": "image/jpeg",
             "jpeg": "image/jpeg",
         }
-        progress_bar = st.progress(0)
-        status_text  = st.empty()
+
+        progress_bar = st.progress(0, text="Initialisation…")
+        log_area     = st.empty()
         newly_extracted = []
+        logs = []
 
         for i, uploaded_file in enumerate(uploaded_files):
-            ext = uploaded_file.name.rsplit(".", 1)[-1].lower()
+            ext       = uploaded_file.name.rsplit(".", 1)[-1].lower()
             mime_type = mime_map.get(ext, "application/octet-stream")
-            status_text.info(f"⏳ Traitement de **{uploaded_file.name}**… ({i+1}/{len(uploaded_files)})")
+
+            progress_bar.progress(
+                (i) / len(uploaded_files),
+                text=f"⏳ Traitement de **{uploaded_file.name}** ({i+1}/{len(uploaded_files)})…"
+            )
 
             try:
                 info = extract_invoice_info(uploaded_file.read(), mime_type, uploaded_file.name)
                 newly_extracted.append(info)
                 if "erreur" not in info:
-                    st.markdown(f'<div class="success-box">✅ {uploaded_file.name} traité avec succès</div>', unsafe_allow_html=True)
+                    logs.append(f"✅ **{uploaded_file.name}** — OK")
                 else:
-                    st.markdown(f'<div class="error-box">❌ Erreur — {uploaded_file.name} : {info["erreur"]}</div>', unsafe_allow_html=True)
+                    logs.append(f"❌ **{uploaded_file.name}** — {info['erreur']}")
             except Exception as e:
-                st.error(f"❌ Erreur inattendue pour {uploaded_file.name} : {e}")
+                logs.append(f"❌ **{uploaded_file.name}** — Erreur : {e}")
+                newly_extracted.append({
+                    "fournisseur": None, "date": None, "commande": None,
+                    "bon_de_livraison": None, "numero_facture": None,
+                    "montant_facture": None, "fichier": uploaded_file.name,
+                    "erreur": str(e)
+                })
 
-            progress_bar.progress((i + 1) / len(uploaded_files))
+            log_area.info("\n\n".join(logs))
+            progress_bar.progress(
+                (i + 1) / len(uploaded_files),
+                text=f"({i+1}/{len(uploaded_files)}) terminé"
+            )
 
+        # Sauvegarde dans session_state
         st.session_state.extracted_data.extend(newly_extracted)
+        st.session_state.last_extraction_count = len(newly_extracted)
+
         progress_bar.empty()
-        status_text.empty()
-        st.success(f"✅ Traitement terminé ! {len(newly_extracted)} fichier(s) traité(s)")
-        st.rerun()
+        log_area.empty()
+        st.success(f"✅ Extraction terminée — {len(newly_extracted)} fichier(s) traité(s) !")
 
+    # ── Affichage du tableau ───────────────────────────────────────────────
     if st.session_state.extracted_data:
-        df = pd.DataFrame(st.session_state.extracted_data)
         column_mapping = {
-            'fournisseur': 'Fournisseur', 'date': 'Date',
-            'commande': 'Commande', 'bon_de_livraison': 'Bon Livraison',
-            'numero_facture': 'N° Facture', 'montant_facture': 'Montant (MAD)',
-            'fichier': 'Fichier'
+            'fournisseur':     'Fournisseur',
+            'date':            'Date',
+            'commande':        'N° Commande',
+            'bon_de_livraison':'Bon Livraison',
+            'numero_facture':  'N° Facture',
+            'montant_facture': 'Montant (MAD)',
+            'fichier':         'Fichier'
         }
+        df = pd.DataFrame(st.session_state.extracted_data)
         df_display = df.rename(columns=column_mapping)
-        display_cols = [c for c in ['Fournisseur', 'Date', 'N° Facture', 'Montant (MAD)', 'Fichier'] if c in df_display.columns]
-        st.dataframe(df_display[display_cols], use_container_width=True, height=400, hide_index=True)
 
+        # Tableau complet (toutes les colonnes)
+        all_cols = ['Fournisseur', 'Date', 'N° Commande', 'Bon Livraison',
+                    'N° Facture', 'Montant (MAD)', 'Fichier']
+        show_cols = [c for c in all_cols if c in df_display.columns]
+        st.dataframe(df_display[show_cols], use_container_width=True, height=400, hide_index=True)
+
+        # KPIs
         st.markdown("---")
         c1, c2, c3, c4 = st.columns(4)
-        total_amount  = sum(parse_montant(r.get("montant_facture")) for r in st.session_state.extracted_data)
+        total_amount   = sum(parse_montant(r.get("montant_facture")) for r in st.session_state.extracted_data)
         valid_invoices = sum(1 for r in st.session_state.extracted_data if parse_montant(r.get("montant_facture")) > 0)
-        c1.metric("📄 Factures traitées", len(st.session_state.extracted_data))
-        c2.metric("💰 Montant total", f"{total_amount:,.2f} MAD")
+        c1.metric("📄 Factures traitées",   len(st.session_state.extracted_data))
+        c2.metric("💰 Montant total",        f"{total_amount:,.2f} MAD")
         c3.metric("✅ Extractions réussies", f"{valid_invoices}/{len(st.session_state.extracted_data)}")
-        c4.metric("📅 Dernière extraction", datetime.now().strftime("%d/%m/%Y %H:%M"))
+        c4.metric("📅 Dernière extraction",  datetime.now().strftime("%d/%m/%Y %H:%M"))
 
-        with st.expander("📋 Voir toutes les données détaillées"):
-            st.dataframe(df_display, use_container_width=True, hide_index=True)
     else:
         st.markdown("""
         <div style="text-align:center;padding:60px 20px;background:#f8fafc;border-radius:8px;">
             <div style="font-size:5rem;margin-bottom:20px;">🧾</div>
             <p style="font-size:1.2rem;color:#1e293b;margin-bottom:10px;">Aucune donnée extraite</p>
-            <p style="color:#64748b;">Importez des factures dans le panneau de gauche<br>et cliquez sur <strong>Extraire</strong> pour commencer</p>
+            <p style="color:#64748b;">Importez des factures dans le panneau de gauche<br>
+            et cliquez sur <strong>Extraire</strong> pour commencer</p>
         </div>
         """, unsafe_allow_html=True)
 
