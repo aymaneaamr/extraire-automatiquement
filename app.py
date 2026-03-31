@@ -165,20 +165,42 @@ def encode_file(file_bytes: bytes) -> str:
     return base64.standard_b64encode(file_bytes).decode("utf-8")
 
 
-def pdf_to_images(file_bytes: bytes) -> List[str]:
-    """Convertit les pages d'un PDF en images base64 (utilise pdf2image si dispo, sinon fallback)."""
+def pdf_to_images_pymupdf(file_bytes: bytes) -> List[str]:
+    """Convertit les pages PDF en images base64 via PyMuPDF (pas besoin de poppler)."""
     try:
-        import pdf2image
-        images = pdf2image.convert_from_bytes(file_bytes, dpi=200, first_page=1, last_page=3)
-        result = []
-        for img in images:
-            buf = BytesIO()
-            img.save(buf, format="JPEG", quality=85)
-            buf.seek(0)
-            result.append(base64.standard_b64encode(buf.read()).decode("utf-8"))
-        return result
-    except Exception:
+        import fitz  # PyMuPDF
+        doc = fitz.open(stream=file_bytes, filetype="pdf")
+        images = []
+        for page_num in range(min(3, len(doc))):
+            page = doc[page_num]
+            mat  = fitz.Matrix(2.0, 2.0)  # zoom x2 = ~150 dpi
+            pix  = page.get_pixmap(matrix=mat)
+            img_bytes = pix.tobytes("jpeg")
+            images.append(base64.standard_b64encode(img_bytes).decode("utf-8"))
+        doc.close()
+        return images
+    except Exception as e:
         return []
+
+
+def parse_claude_json(raw: str) -> dict:
+    """Nettoie et parse la réponse JSON de Claude."""
+    clean = re.sub(r"^```(?:json)?\s*", "", raw.strip())
+    clean = re.sub(r"\s*```$", "", clean).strip()
+    clean = re.sub(r'\s+', ' ', clean)
+    try:
+        return json.loads(clean)
+    except json.JSONDecodeError:
+        m = re.search(r'\{.*\}', clean, re.DOTALL)
+        if m:
+            return json.loads(m.group())
+        raise ValueError(f"Réponse non parseable : {clean[:300]}")
+
+
+def is_all_null(data: dict) -> bool:
+    """Vérifie si tous les champs métier sont null."""
+    fields = ["fournisseur", "date", "commande", "bon_de_livraison", "numero_facture", "montant_facture"]
+    return all(data.get(f) in [None, "null", "NULL", "None", ""] for f in fields)
 
 
 def extract_invoice_info(file_bytes: bytes, mime: str, filename: str) -> Dict:
@@ -190,119 +212,95 @@ def extract_invoice_info(file_bytes: bytes, mime: str, filename: str) -> Dict:
 
         client = anthropic.Anthropic(api_key=api_key)
 
-        prompt = """Tu es un expert en lecture de factures. Analyse attentivement ce document et extrais TOUTES les informations disponibles.
+        prompt = """Tu es un expert comptable spécialisé dans la lecture de factures marocaines et internationales.
+Analyse ce document de facturation et extrais les informations demandées.
 
-Retourne UNIQUEMENT ce JSON (aucun texte avant ou après) :
+Réponds UNIQUEMENT avec ce JSON (rien avant, rien après) :
 {
-  "fournisseur": "nom complet de l'entreprise qui émet la facture (vendeur/fournisseur)",
-  "date": "date de la facture au format JJ/MM/AAAA",
-  "commande": "numéro de bon de commande ou numéro de commande (BC, PO, N° commande...)",
-  "bon_de_livraison": "numéro du bon de livraison (BL, delivery note...)",
-  "numero_facture": "numéro de la facture (N° facture, invoice number, FAC...)",
-  "montant_facture": "montant total TTC en chiffres uniquement, sans symbole (ex: 15000.00)"
+  "fournisseur": "raison sociale complète de l'entreprise émettrice (qui vend/facture)",
+  "date": "date de la facture format JJ/MM/AAAA",
+  "commande": "numéro bon de commande (BC, PO, N°BC, Order No, Commande N°...)",
+  "bon_de_livraison": "numéro bon de livraison (BL, N°BL, Delivery Note, Bordereau...)",
+  "numero_facture": "numéro de facture (N°, FAC, FACT, Invoice No, Facture N°...)",
+  "montant_facture": "montant TOTAL TTC final en chiffres purs sans espace ni symbole (ex: 12500.00)"
 }
 
-Instructions importantes :
-- Cherche partout dans le document : en-tête, pied de page, tableau, corps du texte
-- Pour le fournisseur : c'est l'entreprise QUI ENVOIE la facture (pas le client)
-- Pour le montant : prends le TOTAL TTC (montant le plus élevé, après TVA)
-- Pour les numéros : cherche des labels comme "N°", "Ref", "Réf", "No.", "#", "BC", "BL", "FAC"
-- Si une information est vraiment absente, mets null
-- Réponds UNIQUEMENT avec le JSON, absolument rien d'autre"""
+RÈGLES STRICTES :
+- fournisseur = l'entité qui ÉMET la facture (en haut à gauche généralement)
+- montant = le TOTAL le plus élevé mentionné (TTC, TVA incluse)
+- Si un champ est absent du document : null
+- JSON uniquement, ZÉRO texte autour"""
 
-        # Essai 1 : envoyer le PDF natif (fonctionne pour PDF avec texte)
-        content_pdf = [
-            {
-                "type": "document",
-                "source": {
-                    "type": "base64",
-                    "media_type": "application/pdf",
-                    "data": encode_file(file_bytes)
-                }
-            },
-            {"type": "text", "text": prompt}
-        ]
+        raw_response = None
 
         if mime == "application/pdf":
-            # Tenter d'abord avec le PDF natif
-            response = client.messages.create(
-                model="claude-3-5-sonnet-20241022",
-                max_tokens=1024,
-                temperature=0,
-                messages=[{"role": "user", "content": content_pdf}]
-            )
-            raw = response.content[0].text.strip()
-            raw_clean = re.sub(r"^```(?:json)?\s*", "", raw)
-            raw_clean = re.sub(r"\s*```$", "", raw_clean).strip()
+            # ── Stratégie 1 : PDF → images via PyMuPDF (le plus fiable) ───
+            data = {}
+            page_images = pdf_to_images_pymupdf(file_bytes)
 
-            # Vérifier si le résultat est vide / tous null
-            try:
-                data_test = json.loads(raw_clean)
-                all_null = all(
-                    v is None or v in ["null", "NULL", "None", ""]
-                    for k, v in data_test.items() if k != "fichier"
+            if page_images:
+                img_blocks = []
+                for img_b64 in page_images[:2]:
+                    img_blocks.append({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/jpeg",
+                            "data": img_b64
+                        }
+                    })
+                img_blocks.append({"type": "text", "text": prompt})
+
+                response = client.messages.create(
+                    model="claude-3-5-sonnet-20241022",
+                    max_tokens=1024,
+                    temperature=0,
+                    messages=[{"role": "user", "content": img_blocks}]
                 )
-            except Exception:
-                all_null = True
+                raw_response = response.content[0].text
+                data = parse_claude_json(raw_response)
 
-            # Si tous null → essayer avec conversion en images (PDF scanné)
-            if all_null:
-                page_images = pdf_to_images(file_bytes)
-                if page_images:
-                    img_content = []
-                    for img_b64 in page_images[:2]:  # max 2 pages
-                        img_content.append({
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/jpeg",
-                                "data": img_b64
-                            }
-                        })
-                    img_content.append({"type": "text", "text": prompt})
-                    response = client.messages.create(
+            # ── Stratégie 2 : PDF natif avec beta header (fallback) ────────
+            if is_all_null(data) or not data:
+                try:
+                    response = client.beta.messages.create(
                         model="claude-3-5-sonnet-20241022",
                         max_tokens=1024,
                         temperature=0,
-                        messages=[{"role": "user", "content": img_content}]
+                        betas=["pdfs-2024-09-25"],
+                        messages=[{"role": "user", "content": [
+                            {"type": "document", "source": {
+                                "type": "base64",
+                                "media_type": "application/pdf",
+                                "data": encode_file(file_bytes)
+                            }},
+                            {"type": "text", "text": prompt}
+                        ]}]
                     )
-                    raw = response.content[0].text.strip()
-                    raw_clean = re.sub(r"^```(?:json)?\s*", "", raw)
-                    raw_clean = re.sub(r"\s*```$", "", raw_clean).strip()
+                    raw_response = response.content[0].text
+                    data = parse_claude_json(raw_response)
+                except Exception:
+                    pass
+
         else:
-            # Image directe (PNG, JPG)
-            content_img = [
-                {
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": mime,
-                        "data": encode_file(file_bytes)
-                    }
-                },
-                {"type": "text", "text": prompt}
-            ]
+            # ── Image directe (PNG, JPG) ───────────────────────────────────
             response = client.messages.create(
                 model="claude-3-5-sonnet-20241022",
                 max_tokens=1024,
                 temperature=0,
-                messages=[{"role": "user", "content": content_img}]
+                messages=[{"role": "user", "content": [
+                    {"type": "image", "source": {
+                        "type": "base64",
+                        "media_type": mime,
+                        "data": encode_file(file_bytes)
+                    }},
+                    {"type": "text", "text": prompt}
+                ]}]
             )
-            raw = response.content[0].text.strip()
-            raw_clean = re.sub(r"^```(?:json)?\s*", "", raw)
-            raw_clean = re.sub(r"\s*```$", "", raw_clean).strip()
+            raw_response = response.content[0].text
+            data = parse_claude_json(raw_response)
 
-        raw_clean = re.sub(r'\s+', ' ', raw_clean)
-
-        try:
-            data = json.loads(raw_clean)
-        except json.JSONDecodeError:
-            json_match = re.search(r'\{.*\}', raw_clean, re.DOTALL)
-            if json_match:
-                data = json.loads(json_match.group())
-            else:
-                raise ValueError(f"Réponse Claude non parseable : {raw_clean[:300]}")
-
+        # Nettoyage final des champs
         for field in ["fournisseur", "date", "commande", "bon_de_livraison", "numero_facture", "montant_facture"]:
             if field not in data or data[field] in ["null", "NULL", "None", "", None]:
                 data[field] = None
