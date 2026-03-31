@@ -1,5 +1,5 @@
 """
-Application Streamlit pour l'extraction automatique d'informations de factures via l'API Claude d'Anthropic.
+Extraction Automatique de Factures - Version finale
 """
 
 import streamlit as st
@@ -14,9 +14,8 @@ from io import BytesIO
 from datetime import datetime
 from typing import List, Dict, Optional
 import re
-import sys
 
-# ── Page config ──────────────────────────────────────────────────────────────
+# ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Extraction Factures",
     page_icon="🧾",
@@ -24,68 +23,40 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# ── Custom CSS ────────────────────────────────────────────────────────────────
+# ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
     .main-header {
         background: linear-gradient(135deg, #1e3a8a, #3b82f6);
-        color: white;
-        padding: 20px 30px;
-        border-radius: 12px;
-        margin-bottom: 25px;
-        text-align: center;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        color: white; padding: 20px 30px; border-radius: 12px;
+        margin-bottom: 25px; text-align: center;
+        box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
     }
     .main-header h1 { margin: 0; font-size: 2rem; font-weight: 600; }
     .main-header p  { margin: 5px 0 0; opacity: 0.85; font-size: 1rem; }
     .info-box {
-        background: #eff6ff;
-        border-left: 4px solid #3b82f6;
-        padding: 12px 16px;
-        border-radius: 6px;
-        margin-bottom: 15px;
-        font-size: 0.9rem;
-        color: #1e3a8a;
+        background: #eff6ff; border-left: 4px solid #3b82f6;
+        padding: 12px 16px; border-radius: 6px; margin-bottom: 15px;
+        font-size: 0.9rem; color: #1e3a8a;
     }
-    .success-box {
-        background: #f0fdf4;
-        border-left: 4px solid #22c55e;
-        padding: 12px 16px;
-        border-radius: 6px;
-        margin: 10px 0;
-        color: #166534;
+    .result-box {
+        background: #f0fdf4; border-left: 4px solid #22c55e;
+        padding: 14px 18px; border-radius: 8px; margin: 8px 0; color: #166534;
     }
     .error-box {
-        background: #fef2f2;
-        border-left: 4px solid #ef4444;
-        padding: 12px 16px;
-        border-radius: 6px;
-        margin: 10px 0;
-        color: #991b1b;
+        background: #fef2f2; border-left: 4px solid #ef4444;
+        padding: 14px 18px; border-radius: 8px; margin: 8px 0; color: #991b1b;
     }
     .stButton > button {
         background: linear-gradient(135deg, #1e3a8a, #3b82f6);
-        color: white;
-        border: none;
-        border-radius: 8px;
-        padding: 10px 24px;
-        font-size: 1rem;
-        font-weight: 600;
-        width: 100%;
-        transition: all .2s;
+        color: white; border: none; border-radius: 8px;
+        padding: 10px 24px; font-size: 1rem; font-weight: 600;
+        width: 100%; transition: all .2s;
     }
-    .stButton > button:hover {
-        opacity: .85;
-        transform: translateY(-1px);
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-    }
+    .stButton > button:hover { opacity: .85; transform: translateY(-1px); }
     .footer {
-        text-align: center;
-        margin-top: 40px;
-        padding: 20px;
-        color: #6b7280;
-        font-size: 0.875rem;
-        border-top: 1px solid #e5e7eb;
+        text-align: center; margin-top: 40px; padding: 20px;
+        color: #6b7280; font-size: 0.875rem; border-top: 1px solid #e5e7eb;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -98,93 +69,77 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ── Session state initialization ──────────────────────────────────────────────
-if "extracted_data" not in st.session_state:
-    st.session_state.extracted_data = []
-if "api_key_configured" not in st.session_state:
-    st.session_state.api_key_configured = False
+# ── Session state ─────────────────────────────────────────────────────────────
+for key, val in [("extracted_data", []), ("api_key_configured", False)]:
+    if key not in st.session_state:
+        st.session_state[key] = val
 
-# ── Résolution de la clé API (secrets Streamlit Cloud OU saisie manuelle) ────
+# ── Clé API ───────────────────────────────────────────────────────────────────
 def get_api_key() -> Optional[str]:
-    """Récupère la clé API depuis st.secrets ou depuis la session."""
-    # Priorité 1 : st.secrets (pour Streamlit Cloud)
     try:
         return st.secrets["ANTHROPIC_API_KEY"]
-    except (KeyError, FileNotFoundError):
-        pass
-    # Priorité 2 : saisie manuelle via la sidebar
-    return st.session_state.get("manual_api_key")
+    except Exception:
+        return st.session_state.get("manual_api_key")
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("### ⚙️ Configuration")
     st.markdown("---")
-
-    # Vérifier si la clé est déjà dans les secrets
     key_from_secrets = False
     try:
         _ = st.secrets["ANTHROPIC_API_KEY"]
         key_from_secrets = True
-    except (KeyError, FileNotFoundError):
+    except Exception:
         pass
 
     if key_from_secrets:
         st.success("✅ Clé API chargée depuis les secrets")
         st.session_state.api_key_configured = True
     else:
-        api_key_input = st.text_input(
-            "Clé API Anthropic",
-            type="password",
-            help="Entrez votre clé API Anthropic (sk-ant-...)",
-            placeholder="sk-ant-..."
-        )
+        api_key_input = st.text_input("Clé API Anthropic", type="password", placeholder="sk-ant-...")
         if api_key_input:
             st.session_state.manual_api_key = api_key_input
             st.session_state.api_key_configured = True
             st.success("✅ Clé API configurée")
         else:
             st.session_state.api_key_configured = False
-            st.warning("⚠️ Clé API requise pour l'extraction")
+            st.warning("⚠️ Clé API requise")
 
     st.markdown("---")
-    st.markdown("### 📋 Instructions")
-    st.markdown("""
-    1. Configurez votre clé API Anthropic
-    2. Importez vos factures (PDF, PNG, JPG)
-    3. Cliquez sur **Extraire**
-    4. Téléchargez le fichier Excel
+    st.markdown("""### 📋 Instructions
+1. Configurez votre clé API Anthropic
+2. Importez vos factures (PDF, PNG, JPG)
+3. Cliquez sur **Extraire**
+4. Téléchargez le fichier Excel
 
-    **Formats supportés :** PDF · PNG · JPG/JPEG
-    """)
-
+**Formats :** PDF · PNG · JPG/JPEG""")
     st.markdown("---")
-    st.markdown(f"**Version :** 1.1.0  \n**Date :** {datetime.now().strftime('%d/%m/%Y')}")
+    st.markdown(f"**v2.0** | {datetime.now().strftime('%d/%m/%Y')}")
+
+# ── Prompt extraction ─────────────────────────────────────────────────────────
+PROMPT = """Tu es un expert comptable. Analyse cette facture/document et extrais les informations.
+
+Réponds UNIQUEMENT avec ce JSON (rien avant, rien après) :
+{
+  "fournisseur": "raison sociale de l'entreprise qui ÉMET la facture",
+  "date": "date de la facture format JJ/MM/AAAA",
+  "commande": "numéro bon de commande (BC, PO, CMDE, N°BC, Order...)",
+  "bon_de_livraison": "numéro bon de livraison (BL, N°BL, Livraison Réf...)",
+  "numero_facture": "numéro de facture (FAC, FACT, N°, Invoice No...)",
+  "montant_facture": "montant TOTAL TTC en chiffres sans espace ni symbole (ex: 185195.40)"
+}
+
+RÈGLES :
+- fournisseur = entité en haut du document qui émet/vend
+- montant = TOTAL TTC final (après TVA, le plus grand montant)
+- champ absent = null
+- JSON UNIQUEMENT, rien d'autre"""
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-def encode_file(file_bytes: bytes) -> str:
-    return base64.standard_b64encode(file_bytes).decode("utf-8")
+def encode_b64(data: bytes) -> str:
+    return base64.standard_b64encode(data).decode("utf-8")
 
-
-def pdf_to_images_pymupdf(file_bytes: bytes) -> List[str]:
-    """Convertit les pages PDF en images base64 via PyMuPDF (pas besoin de poppler)."""
-    try:
-        import fitz  # PyMuPDF
-        doc = fitz.open(stream=file_bytes, filetype="pdf")
-        images = []
-        for page_num in range(min(3, len(doc))):
-            page = doc[page_num]
-            mat  = fitz.Matrix(2.0, 2.0)  # zoom x2 = ~150 dpi
-            pix  = page.get_pixmap(matrix=mat)
-            img_bytes = pix.tobytes("jpeg")
-            images.append(base64.standard_b64encode(img_bytes).decode("utf-8"))
-        doc.close()
-        return images
-    except Exception as e:
-        return []
-
-
-def parse_claude_json(raw: str) -> dict:
-    """Nettoie et parse la réponse JSON de Claude."""
+def parse_json_response(raw: str) -> dict:
     clean = re.sub(r"^```(?:json)?\s*", "", raw.strip())
     clean = re.sub(r"\s*```$", "", clean).strip()
     clean = re.sub(r'\s+', ' ', clean)
@@ -194,244 +149,228 @@ def parse_claude_json(raw: str) -> dict:
         m = re.search(r'\{.*\}', clean, re.DOTALL)
         if m:
             return json.loads(m.group())
-        raise ValueError(f"Réponse non parseable : {clean[:300]}")
+        raise ValueError(f"JSON invalide: {clean[:200]}")
 
-
-def is_all_null(data: dict) -> bool:
-    """Vérifie si tous les champs métier sont null."""
-    fields = ["fournisseur", "date", "commande", "bon_de_livraison", "numero_facture", "montant_facture"]
-    return all(data.get(f) in [None, "null", "NULL", "None", ""] for f in fields)
-
+def normalize_fields(data: dict, filename: str) -> dict:
+    for f in ["fournisseur", "date", "commande", "bon_de_livraison", "numero_facture", "montant_facture"]:
+        if data.get(f) in [None, "null", "NULL", "None", "", "N/A", "n/a"]:
+            data[f] = None
+    data["fichier"] = filename
+    return data
 
 def extract_invoice_info(file_bytes: bytes, mime: str, filename: str) -> Dict:
-    """Extrait les informations d'une facture via l'API Claude."""
-    try:
-        api_key = get_api_key()
-        if not api_key:
-            raise ValueError("Clé API non configurée.")
+    """Extraction principale avec 3 stratégies."""
+    api_key = get_api_key()
+    if not api_key:
+        raise ValueError("Clé API non configurée.")
 
-        client = anthropic.Anthropic(api_key=api_key)
+    client = anthropic.Anthropic(api_key=api_key)
+    last_error = None
 
-        prompt = """Tu es un expert comptable spécialisé dans la lecture de factures marocaines et internationales.
-Analyse ce document de facturation et extrais les informations demandées.
+    # ══ Stratégie 1 : PDF natif avec beta header (scans inclus) ══════════════
+    if mime == "application/pdf":
+        try:
+            resp = client.beta.messages.create(
+                model="claude-opus-4-5",
+                max_tokens=1024,
+                betas=["pdfs-2024-09-25"],
+                messages=[{"role": "user", "content": [
+                    {"type": "document", "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": encode_b64(file_bytes)
+                    }},
+                    {"type": "text", "text": PROMPT}
+                ]}]
+            )
+            data = parse_json_response(resp.content[0].text)
+            # Vérifier si on a au moins 1 champ non-null
+            fields = ["fournisseur", "date", "commande", "bon_de_livraison", "numero_facture", "montant_facture"]
+            has_data = any(data.get(f) not in [None, "null", "NULL", "None", ""] for f in fields)
+            if has_data:
+                return normalize_fields(data, filename)
+        except Exception as e:
+            last_error = str(e)
 
-Réponds UNIQUEMENT avec ce JSON (rien avant, rien après) :
-{
-  "fournisseur": "raison sociale complète de l'entreprise émettrice (qui vend/facture)",
-  "date": "date de la facture format JJ/MM/AAAA",
-  "commande": "numéro bon de commande (BC, PO, N°BC, Order No, Commande N°...)",
-  "bon_de_livraison": "numéro bon de livraison (BL, N°BL, Delivery Note, Bordereau...)",
-  "numero_facture": "numéro de facture (N°, FAC, FACT, Invoice No, Facture N°...)",
-  "montant_facture": "montant TOTAL TTC final en chiffres purs sans espace ni symbole (ex: 12500.00)"
-}
+    # ══ Stratégie 2 : PDF natif avec claude-3-5-sonnet standard ══════════════
+    if mime == "application/pdf":
+        try:
+            resp = client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=1024,
+                temperature=0,
+                messages=[{"role": "user", "content": [
+                    {"type": "document", "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": encode_b64(file_bytes)
+                    }},
+                    {"type": "text", "text": PROMPT}
+                ]}]
+            )
+            data = parse_json_response(resp.content[0].text)
+            fields = ["fournisseur", "date", "commande", "bon_de_livraison", "numero_facture", "montant_facture"]
+            has_data = any(data.get(f) not in [None, "null", "NULL", "None", ""] for f in fields)
+            if has_data:
+                return normalize_fields(data, filename)
+        except Exception as e:
+            last_error = str(e)
 
-RÈGLES STRICTES :
-- fournisseur = l'entité qui ÉMET la facture (en haut à gauche généralement)
-- montant = le TOTAL le plus élevé mentionné (TTC, TVA incluse)
-- Si un champ est absent du document : null
-- JSON uniquement, ZÉRO texte autour"""
+    # ══ Stratégie 3 : Conversion PDF → images via PyMuPDF ════════════════════
+    if mime == "application/pdf":
+        try:
+            import fitz
+            doc = fitz.open(stream=file_bytes, filetype="pdf")
+            img_blocks = []
+            for i in range(min(2, len(doc))):
+                pix = doc[i].get_pixmap(matrix=fitz.Matrix(2.0, 2.0))
+                img_b64 = base64.standard_b64encode(pix.tobytes("jpeg")).decode()
+                img_blocks.append({
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": "image/jpeg", "data": img_b64}
+                })
+            doc.close()
+            img_blocks.append({"type": "text", "text": PROMPT})
+            resp = client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=1024,
+                temperature=0,
+                messages=[{"role": "user", "content": img_blocks}]
+            )
+            data = parse_json_response(resp.content[0].text)
+            return normalize_fields(data, filename)
+        except Exception as e:
+            last_error = str(e)
 
-        raw_response = None
-
-        if mime == "application/pdf":
-            # ── Stratégie 1 : PDF → images via PyMuPDF (le plus fiable) ───
-            data = {}
-            page_images = pdf_to_images_pymupdf(file_bytes)
-
-            if page_images:
-                img_blocks = []
-                for img_b64 in page_images[:2]:
-                    img_blocks.append({
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "image/jpeg",
-                            "data": img_b64
-                        }
-                    })
-                img_blocks.append({"type": "text", "text": prompt})
-
-                response = client.messages.create(
-                    model="claude-3-5-sonnet-20241022",
-                    max_tokens=1024,
-                    temperature=0,
-                    messages=[{"role": "user", "content": img_blocks}]
-                )
-                raw_response = response.content[0].text
-                data = parse_claude_json(raw_response)
-
-            # ── Stratégie 2 : PDF natif avec beta header (fallback) ────────
-            if is_all_null(data) or not data:
-                try:
-                    response = client.beta.messages.create(
-                        model="claude-3-5-sonnet-20241022",
-                        max_tokens=1024,
-                        temperature=0,
-                        betas=["pdfs-2024-09-25"],
-                        messages=[{"role": "user", "content": [
-                            {"type": "document", "source": {
-                                "type": "base64",
-                                "media_type": "application/pdf",
-                                "data": encode_file(file_bytes)
-                            }},
-                            {"type": "text", "text": prompt}
-                        ]}]
-                    )
-                    raw_response = response.content[0].text
-                    data = parse_claude_json(raw_response)
-                except Exception:
-                    pass
-
-        else:
-            # ── Image directe (PNG, JPG) ───────────────────────────────────
-            response = client.messages.create(
+    # ══ Stratégie 4 : Image directe (PNG/JPG) ════════════════════════════════
+    if mime != "application/pdf":
+        try:
+            resp = client.messages.create(
                 model="claude-3-5-sonnet-20241022",
                 max_tokens=1024,
                 temperature=0,
                 messages=[{"role": "user", "content": [
                     {"type": "image", "source": {
-                        "type": "base64",
-                        "media_type": mime,
-                        "data": encode_file(file_bytes)
+                        "type": "base64", "media_type": mime,
+                        "data": encode_b64(file_bytes)
                     }},
-                    {"type": "text", "text": prompt}
+                    {"type": "text", "text": PROMPT}
                 ]}]
             )
-            raw_response = response.content[0].text
-            data = parse_claude_json(raw_response)
+            data = parse_json_response(resp.content[0].text)
+            return normalize_fields(data, filename)
+        except Exception as e:
+            last_error = str(e)
 
-        # Nettoyage final des champs
-        for field in ["fournisseur", "date", "commande", "bon_de_livraison", "numero_facture", "montant_facture"]:
-            if field not in data or data[field] in ["null", "NULL", "None", "", None]:
-                data[field] = None
+    # Si toutes les stratégies échouent
+    raise ValueError(f"Toutes les stratégies ont échoué. Dernière erreur : {last_error}")
 
-        data["fichier"] = filename
-        return data
-
-    except Exception as e:
-        return {
-            "fournisseur": None, "date": None, "commande": None,
-            "bon_de_livraison": None, "numero_facture": None,
-            "montant_facture": None, "fichier": filename, "erreur": str(e)
-        }
-
-
-def parse_montant(value) -> float:
-    """Convertit une valeur montant (str ou number) en float."""
-    if value is None or value in ("null", ""):
+def parse_montant(v) -> float:
+    if v in (None, "null", ""):
         return 0.0
     try:
-        if isinstance(value, str):
-            value = re.sub(r'[^\d.,-]', '', value)
-            value = value.replace(',', '.')
-            if value.count('.') > 1:
-                value = value.replace('.', '', value.count('.') - 1)
-        return float(value)
-    except (ValueError, TypeError):
+        if isinstance(v, str):
+            v = re.sub(r'[^\d.,-]', '', v).replace(',', '.')
+            if v.count('.') > 1:
+                v = v.replace('.', '', v.count('.') - 1)
+        return float(v)
+    except Exception:
         return 0.0
 
-
 def build_excel(records: List[Dict]) -> bytes:
-    """Construit un fichier Excel à partir des données extraites."""
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Factures"
 
-    header_fill = PatternFill("solid", fgColor="1e3a8a")
-    alt_fill    = PatternFill("solid", fgColor="dbeafe")
-    white_fill  = PatternFill("solid", fgColor="FFFFFF")
-    thin_border = Border(
+    hfill  = PatternFill("solid", fgColor="1e3a8a")
+    afill  = PatternFill("solid", fgColor="dbeafe")
+    wfill  = PatternFill("solid", fgColor="FFFFFF")
+    border = Border(*[Side(style="thin", color="d1d5db")]*4,
+                    **{s: Side(style="thin", color="d1d5db")
+                       for s in ["left","right","top","bottom"]})
+    border = Border(
         left=Side(style="thin", color="d1d5db"),
         right=Side(style="thin", color="d1d5db"),
         top=Side(style="thin", color="d1d5db"),
         bottom=Side(style="thin", color="d1d5db"),
     )
 
-    columns = [
-        ("Fournisseur",      "fournisseur",     25),
-        ("Date",             "date",            14),
-        ("N° Commande",      "commande",        18),
+    cols = [
+        ("Fournisseur",      "fournisseur",      25),
+        ("Date",             "date",             14),
+        ("N° Commande",      "commande",         18),
         ("Bon de Livraison", "bon_de_livraison", 20),
-        ("N° Facture",       "numero_facture",  20),
-        ("Montant TTC",      "montant_facture", 15),
-        ("Fichier Source",   "fichier",         30),
+        ("N° Facture",       "numero_facture",   20),
+        ("Montant TTC",      "montant_facture",  16),
+        ("Fichier Source",   "fichier",          30),
     ]
 
-    for col_idx, (label, _, width) in enumerate(columns, 1):
-        cell = ws.cell(row=1, column=col_idx, value=label)
-        cell.font = Font(bold=True, color="FFFFFF", name="Arial", size=11)
-        cell.fill = header_fill
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        cell.border = thin_border
-        ws.column_dimensions[get_column_letter(col_idx)].width = width
+    for ci, (label, _, w) in enumerate(cols, 1):
+        c = ws.cell(row=1, column=ci, value=label)
+        c.font = Font(bold=True, color="FFFFFF", name="Arial", size=11)
+        c.fill = hfill
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        c.border = border
+        ws.column_dimensions[get_column_letter(ci)].width = w
     ws.row_dimensions[1].height = 30
 
-    montant_total = 0.0
-    for row_idx, record in enumerate(records, 2):
-        fill = alt_fill if row_idx % 2 == 0 else white_fill
-        for col_idx, (_, key, _) in enumerate(columns, 1):
-            value = record.get(key)
+    total = 0.0
+    for ri, rec in enumerate(records, 2):
+        fill = afill if ri % 2 == 0 else wfill
+        for ci, (_, key, _) in enumerate(cols, 1):
+            val = rec.get(key)
             if key == "montant_facture":
-                value = parse_montant(value)
-                montant_total += value
-            cell = ws.cell(row=row_idx, column=col_idx,
-                           value=value if value not in (None, "null", "") else "")
-            cell.font = Font(name="Arial", size=10)
-            cell.fill = fill
-            cell.alignment = Alignment(
-                horizontal="right" if key == "montant_facture" else "left",
-                vertical="center"
-            )
-            cell.border = thin_border
-            if key == "montant_facture" and isinstance(value, float):
-                cell.number_format = '#,##0.00 "MAD"'
-        ws.row_dimensions[row_idx].height = 20
+                val = parse_montant(val)
+                total += val
+            c = ws.cell(row=ri, column=ci, value=val if val not in (None, "null", "") else "")
+            c.font = Font(name="Arial", size=10)
+            c.fill = fill
+            c.alignment = Alignment(horizontal="right" if key == "montant_facture" else "left", vertical="center")
+            c.border = border
+            if key == "montant_facture" and isinstance(val, float):
+                c.number_format = '#,##0.00 "MAD"'
+        ws.row_dimensions[ri].height = 20
 
-    last_row = len(records) + 2
-    ws.merge_cells(start_row=last_row, start_column=1, end_row=last_row, end_column=5)
-    lbl = ws.cell(row=last_row, column=1, value="TOTAL GÉNÉRAL")
+    lr = len(records) + 2
+    ws.merge_cells(start_row=lr, start_column=1, end_row=lr, end_column=5)
+    lbl = ws.cell(row=lr, column=1, value="TOTAL GÉNÉRAL")
     lbl.font = Font(bold=True, name="Arial", size=11)
     lbl.fill = PatternFill("solid", fgColor="fbbf24")
-    lbl.border = thin_border
-    tot = ws.cell(row=last_row, column=6, value=montant_total)
+    lbl.border = border
+    tot = ws.cell(row=lr, column=6, value=total)
     tot.font = Font(bold=True, name="Arial", size=11)
     tot.number_format = '#,##0.00 "MAD"'
     tot.alignment = Alignment(horizontal="right")
     tot.fill = PatternFill("solid", fgColor="fbbf24")
-    tot.border = thin_border
+    tot.border = border
 
     buf = BytesIO()
     wb.save(buf)
     buf.seek(0)
     return buf.getvalue()
 
-
-# ── Interface principale ──────────────────────────────────────────────────────
+# ── Interface ─────────────────────────────────────────────────────────────────
 col_left, col_right = st.columns([1, 2])
 
 with col_left:
     st.markdown("### 📤 Importer des Factures")
-    st.markdown("""
-    <div class="info-box">
+    st.markdown("""<div class="info-box">
         <strong>Formats acceptés :</strong> PDF, PNG, JPG, JPEG<br>
         <strong>Taille max :</strong> 200 MB par fichier
-    </div>
-    """, unsafe_allow_html=True)
+    </div>""", unsafe_allow_html=True)
 
     uploaded_files = st.file_uploader(
         "Choisissez vos fichiers",
         type=["pdf", "png", "jpg", "jpeg"],
-        accept_multiple_files=True,
-        help="Glissez-déposez ou cliquez pour sélectionner des fichiers"
+        accept_multiple_files=True
     )
 
     if uploaded_files:
-        st.markdown(f"""
-        <div class="success-box">✅ {len(uploaded_files)} fichier(s) sélectionné(s)</div>
-        """, unsafe_allow_html=True)
-        with st.expander("📋 Voir les fichiers sélectionnés"):
+        st.markdown(f'<div class="result-box">✅ {len(uploaded_files)} fichier(s) sélectionné(s)</div>',
+                    unsafe_allow_html=True)
+        with st.expander("📋 Fichiers sélectionnés"):
             for f in uploaded_files:
-                st.text(f"📄 {f.name} ({f.size / 1024:.1f} KB)")
+                st.text(f"📄 {f.name} ({f.size/1024:.1f} KB)")
 
     extract_btn = st.button(
         "🔍 Extraire les Informations",
@@ -443,121 +382,95 @@ with col_left:
         st.markdown("---")
         st.markdown("### 💾 Exporter")
         excel_bytes = build_excel(st.session_state.extracted_data)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        col_dl, col_clear = st.columns(2)
-        with col_dl:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        c1, c2 = st.columns(2)
+        with c1:
             st.download_button(
-                label="📥 Télécharger Excel",
-                data=excel_bytes,
-                file_name=f"factures_{timestamp}.xlsx",
+                "📥 Télécharger Excel", data=excel_bytes,
+                file_name=f"factures_{ts}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True
             )
-        with col_clear:
+        with c2:
             if st.button("🗑️ Effacer", use_container_width=True):
                 st.session_state.extracted_data = []
-                st.session_state.pop("last_extraction_count", None)
 
 with col_right:
     st.markdown("### 📊 Données Extraites")
 
-    # ── Lancement de l'extraction ──────────────────────────────────────────
     if extract_btn and uploaded_files:
-        mime_map = {
-            "pdf": "application/pdf",
-            "png": "image/png",
-            "jpg": "image/jpeg",
-            "jpeg": "image/jpeg",
-        }
+        mime_map = {"pdf": "application/pdf", "png": "image/png",
+                    "jpg": "image/jpeg", "jpeg": "image/jpeg"}
+        progress = st.progress(0, text="Démarrage…")
+        newly = []
 
-        progress_bar = st.progress(0, text="Initialisation…")
-        log_area     = st.empty()
-        newly_extracted = []
-        logs = []
-
-        for i, uploaded_file in enumerate(uploaded_files):
-            ext       = uploaded_file.name.rsplit(".", 1)[-1].lower()
-            mime_type = mime_map.get(ext, "application/octet-stream")
-
-            progress_bar.progress(
-                (i) / len(uploaded_files),
-                text=f"⏳ Traitement de **{uploaded_file.name}** ({i+1}/{len(uploaded_files)})…"
-            )
-
+        for i, uf in enumerate(uploaded_files):
+            ext = uf.name.rsplit(".", 1)[-1].lower()
+            mime = mime_map.get(ext, "application/octet-stream")
+            progress.progress(i / len(uploaded_files),
+                              text=f"⏳ {uf.name} ({i+1}/{len(uploaded_files)})…")
             try:
-                info = extract_invoice_info(uploaded_file.read(), mime_type, uploaded_file.name)
-                newly_extracted.append(info)
-                if "erreur" not in info:
-                    logs.append(f"✅ **{uploaded_file.name}** — OK")
+                info = extract_invoice_info(uf.read(), mime, uf.name)
+                newly.append(info)
+                # Afficher résultat immédiatement
+                fields_found = [k for k in ["fournisseur","date","numero_facture","montant_facture"]
+                                if info.get(k) not in (None, "null", "")]
+                if fields_found:
+                    st.markdown(f"""<div class="result-box">
+                        ✅ <strong>{uf.name}</strong><br>
+                        🏢 {info.get('fournisseur') or '—'} &nbsp;|&nbsp;
+                        📅 {info.get('date') or '—'} &nbsp;|&nbsp;
+                        🔢 {info.get('numero_facture') or '—'} &nbsp;|&nbsp;
+                        💰 {info.get('montant_facture') or '—'} MAD
+                    </div>""", unsafe_allow_html=True)
                 else:
-                    logs.append(f"❌ **{uploaded_file.name}** — {info['erreur']}")
+                    st.markdown(f'<div class="error-box">⚠️ {uf.name} — aucune donnée extraite</div>',
+                                unsafe_allow_html=True)
             except Exception as e:
-                logs.append(f"❌ **{uploaded_file.name}** — Erreur : {e}")
-                newly_extracted.append({
-                    "fournisseur": None, "date": None, "commande": None,
-                    "bon_de_livraison": None, "numero_facture": None,
-                    "montant_facture": None, "fichier": uploaded_file.name,
-                    "erreur": str(e)
-                })
+                err_info = {"fournisseur": None, "date": None, "commande": None,
+                            "bon_de_livraison": None, "numero_facture": None,
+                            "montant_facture": None, "fichier": uf.name, "erreur": str(e)}
+                newly.append(err_info)
+                st.markdown(f'<div class="error-box">❌ {uf.name} — {e}</div>',
+                            unsafe_allow_html=True)
+            progress.progress((i+1) / len(uploaded_files), text=f"({i+1}/{len(uploaded_files)}) fait")
 
-            log_area.info("\n\n".join(logs))
-            progress_bar.progress(
-                (i + 1) / len(uploaded_files),
-                text=f"({i+1}/{len(uploaded_files)}) terminé"
-            )
+        st.session_state.extracted_data.extend(newly)
+        progress.empty()
+        ok = sum(1 for r in newly if r.get("fournisseur") or r.get("numero_facture"))
+        st.success(f"✅ Terminé — {ok}/{len(newly)} facture(s) extraite(s) avec succès")
 
-        # Sauvegarde dans session_state
-        st.session_state.extracted_data.extend(newly_extracted)
-        st.session_state.last_extraction_count = len(newly_extracted)
-
-        progress_bar.empty()
-        log_area.empty()
-        st.success(f"✅ Extraction terminée — {len(newly_extracted)} fichier(s) traité(s) !")
-
-    # ── Affichage du tableau ───────────────────────────────────────────────
     if st.session_state.extracted_data:
-        column_mapping = {
-            'fournisseur':     'Fournisseur',
-            'date':            'Date',
-            'commande':        'N° Commande',
-            'bon_de_livraison':'Bon Livraison',
-            'numero_facture':  'N° Facture',
-            'montant_facture': 'Montant (MAD)',
-            'fichier':         'Fichier'
-        }
+        st.markdown("---")
         df = pd.DataFrame(st.session_state.extracted_data)
-        df_display = df.rename(columns=column_mapping)
+        col_map = {
+            'fournisseur': 'Fournisseur', 'date': 'Date',
+            'commande': 'N° Commande', 'bon_de_livraison': 'Bon Livraison',
+            'numero_facture': 'N° Facture', 'montant_facture': 'Montant (MAD)',
+            'fichier': 'Fichier'
+        }
+        df2 = df.rename(columns=col_map)
+        show = [c for c in ['Fournisseur','Date','N° Commande','Bon Livraison',
+                            'N° Facture','Montant (MAD)','Fichier'] if c in df2.columns]
+        st.dataframe(df2[show], use_container_width=True, height=min(400, 60+len(df2)*35), hide_index=True)
 
-        # Tableau complet (toutes les colonnes)
-        all_cols = ['Fournisseur', 'Date', 'N° Commande', 'Bon Livraison',
-                    'N° Facture', 'Montant (MAD)', 'Fichier']
-        show_cols = [c for c in all_cols if c in df_display.columns]
-        st.dataframe(df_display[show_cols], use_container_width=True, height=400, hide_index=True)
-
-        # KPIs
         st.markdown("---")
         c1, c2, c3, c4 = st.columns(4)
-        total_amount   = sum(parse_montant(r.get("montant_facture")) for r in st.session_state.extracted_data)
-        valid_invoices = sum(1 for r in st.session_state.extracted_data if parse_montant(r.get("montant_facture")) > 0)
-        c1.metric("📄 Factures traitées",   len(st.session_state.extracted_data))
-        c2.metric("💰 Montant total",        f"{total_amount:,.2f} MAD")
-        c3.metric("✅ Extractions réussies", f"{valid_invoices}/{len(st.session_state.extracted_data)}")
-        c4.metric("📅 Dernière extraction",  datetime.now().strftime("%d/%m/%Y %H:%M"))
-
+        total = sum(parse_montant(r.get("montant_facture")) for r in st.session_state.extracted_data)
+        valid = sum(1 for r in st.session_state.extracted_data if parse_montant(r.get("montant_facture")) > 0)
+        c1.metric("📄 Traitées",  len(st.session_state.extracted_data))
+        c2.metric("💰 Total",     f"{total:,.2f} MAD")
+        c3.metric("✅ Réussies",  f"{valid}/{len(st.session_state.extracted_data)}")
+        c4.metric("📅 Date",      datetime.now().strftime("%d/%m %H:%M"))
     else:
         st.markdown("""
         <div style="text-align:center;padding:60px 20px;background:#f8fafc;border-radius:8px;">
-            <div style="font-size:5rem;margin-bottom:20px;">🧾</div>
-            <p style="font-size:1.2rem;color:#1e293b;margin-bottom:10px;">Aucune donnée extraite</p>
-            <p style="color:#64748b;">Importez des factures dans le panneau de gauche<br>
-            et cliquez sur <strong>Extraire</strong> pour commencer</p>
-        </div>
-        """, unsafe_allow_html=True)
+            <div style="font-size:4rem;margin-bottom:15px;">🧾</div>
+            <p style="font-size:1.1rem;color:#1e293b;">Aucune donnée extraite</p>
+            <p style="color:#64748b;">Importez une facture à gauche et cliquez sur <strong>Extraire</strong></p>
+        </div>""", unsafe_allow_html=True)
 
-# ── Footer ────────────────────────────────────────────────────────────────────
 st.markdown("""
 <div class="footer">
-    <p>🧾 Extraction Automatique de Factures | Propulsé par Claude API et Streamlit</p>
-    <p style="font-size:0.8rem;margin-top:5px;">© 2024 - Tous droits réservés</p>
-</div>
-""", unsafe_allow_html=True)
+    🧾 Extraction Automatique de Factures | Claude API + Streamlit
+</div>""", unsafe_allow_html=True)
