@@ -1,7 +1,8 @@
 """
 Application Streamlit pour l'extraction automatique d'informations de factures via l'API Claude d'Anthropic.
 """
-
+import pkg_resources
+import subprocess
 import streamlit as st
 import anthropic
 import base64
